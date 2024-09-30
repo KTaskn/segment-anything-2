@@ -20,7 +20,7 @@ def compute_background(frames: np.ndarray):
     return np.median(frames, axis=0).astype(np.uint8)
 
 # obj_idが動的に変わるので、最大のobj_idを保持するようにする
-MAX_OBJ_ID = 35
+MAX_OBJ_ID = 50
 def compute_masking(
     paths: np.ndarray,
     F: int = 16,
@@ -30,7 +30,7 @@ def compute_masking(
     output_path: str = "outputs",
 ):
     frames = open_frames(paths)
-    img_background = compute_background(frames_original)
+    img_background = compute_background(frames)
     
     n, w, h, c = frames.shape
     # points_per_side is made to be half of the smallest side of the image
