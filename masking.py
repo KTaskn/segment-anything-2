@@ -12,6 +12,9 @@ from glob import glob
 
 checkpoint = "./checkpoints/sam2_hiera_large.pt"
 model_cfg = "sam2_hiera_l.yaml"
+
+BLUR_SIZE = 9
+BLUR_SIGMA = 0
     
 def open_frames(paths, resize=1.0):
     return np.array([cv2.resize(cv2.imread(path), dsize=None, fx=resize, fy=resize) for path in paths])
@@ -74,7 +77,10 @@ def compute_masking(
                 for obj_id, mask in zip(object_ids, masks):
                     w, h, c = target_frame.shape
                     mask = np.stack([mask[0]] * 3, axis=-1)
-                    output = np.where(mask > 0, target_frame, img_background)
+                    if blur:
+                        output = np.where(mask > 0, target_frame, cv2.GaussianBlur(target_frame, (BLUR_SIZE, BLUR_SIZE), BLUR_SIGMA))
+                    else:
+                        output = np.where(mask > 0, target_frame, img_background)
                     Image.fromarray(output).save(
                         os.path.join(output_path, f"{obj_id:02}_{frame_idx:05}.png")
                     )
@@ -89,7 +95,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("path", type=str)
     parser.add_argument("output", type=str)
+    parser.add_argument("--blur", action="store_true")
     args = parser.parse_args()
     paths = sorted(glob(os.path.join(args.path, "*")))
     print(args.path, args.output)
-    compute_masking(paths, output_path=args.output)
+    compute_masking(paths, blur=args.blur, output_path=args.output)
