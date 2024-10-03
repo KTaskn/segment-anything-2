@@ -9,9 +9,11 @@ import argparse
 import cv2
 from utils import colormap
 from glob import glob
+import shutil
 
 checkpoint = "./checkpoints/sam2_hiera_large.pt"
 model_cfg = "sam2_hiera_l.yaml"
+TMP_DIR = "/tmp/sam2"
 
 BLUR_SIZE = 9
 BLUR_SIGMA = 0
@@ -21,6 +23,12 @@ def open_frames(paths, resize=1.0):
 
 def compute_background(frames: np.ndarray):
     return np.median(frames, axis=0).astype(np.uint8)
+
+def copy_images_to_tmpdir(paths: list[str]):
+    shutil.rmtree(TMP_DIR, ignore_errors=True)
+    os.mkdir(TMP_DIR)
+    for i, path in enumerate(paths):
+        shutil.copy(path, os.path.join(TMP_DIR, os.path.basename(path)))
 
 # obj_idが動的に変わるので、最大のobj_idを保持するようにする
 MAX_OBJ_ID = 50
@@ -51,28 +59,32 @@ def compute_masking(
     with torch.inference_mode(), torch.no_grad(), torch.autocast(
         "cuda", dtype=torch.bfloat16
     ):
-        for start_frame_idx in range(0, frames.shape[0], F):
+        for start_frame_idx in range(0, len(paths), F):
+            # tmpディレクトリに画像をF枚コピー
+            copy_images_to_tmpdir(paths[start_frame_idx:start_frame_idx + F])
             image = frames[start_frame_idx]
             masks = mask_generator.generate(image)
             # Fごとに初期化
             predictor = build_sam2_video_predictor(model_cfg, checkpoint)
-            state = predictor.init_state(os.path.dirname(paths[0]))
+            state = predictor.init_state(TMP_DIR)
             for idx, mask in enumerate(masks):
                 predictor.add_new_mask(
                     inference_state=state,
-                    frame_idx=start_frame_idx,
+                    frame_idx=0,
                     obj_id=idx,
                     mask=mask["segmentation"],
                 )
+                if visualize:
+                    Image.fromarray(mask["segmentation"]).save(f"./tmp/masks/mask_{start_frame_idx:03}_{idx:02}.png")
                 
                 # obj_idがMAX_OBJ_IDを超えた場合は停止
                 assert idx < MAX_OBJ_ID
                     
 
             # propagate the prompts to get masklets throughout the video
-            for frame_idx, object_ids, masks in predictor.propagate_in_video(state, start_frame_idx=start_frame_idx, max_frame_num_to_track=F):
+            for frame_idx, object_ids, masks in predictor.propagate_in_video(state, start_frame_idx=0, max_frame_num_to_track=F):
                 masks = masks.cpu().numpy()
-                target_frame = frames[frame_idx]
+                target_frame = frames[frame_idx + start_frame_idx]
                 # coloring the each mask
                 for obj_id, mask in zip(object_ids, masks):
                     w, h, c = target_frame.shape
@@ -82,21 +94,16 @@ def compute_masking(
                     else:
                         output = np.where(mask > 0, target_frame, img_background)
                     Image.fromarray(output).save(
-                        os.path.join(output_path, f"{obj_id:02}_{frame_idx:05}.png")
-                    )
-                    
-                not_exists_obj_id = list(set(range(MAX_OBJ_ID)) - set(object_ids))
-                for obj_id in not_exists_obj_id:
-                    Image.fromarray(img_background).save(
-                        os.path.join(output_path, f"{obj_id:02}_{frame_idx:05}.png")
-                    )
+                        os.path.join(output_path, f"{obj_id:02}_{frame_idx + start_frame_idx:05}.png")
+                    )                    
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("path", type=str)
     parser.add_argument("output", type=str)
+    parser.add_argument("--visualize", action="store_true")
     parser.add_argument("--blur", action="store_true")
     args = parser.parse_args()
     paths = sorted(glob(os.path.join(args.path, "*")))
     print(args.path, args.output)
-    compute_masking(paths, blur=args.blur, output_path=args.output)
+    compute_masking(paths, blur=args.blur, output_path=args.output, visualize=args.visualize)
